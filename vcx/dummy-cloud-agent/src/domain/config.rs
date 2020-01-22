@@ -8,6 +8,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub wallet_storage: WalletStorageConfig,
     pub protocol_type: Option<ProtocolTypes>,
+    pub indy_runtime: Option<IndyRuntimeConfig>
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -45,8 +46,20 @@ pub struct WalletStorageConfig {
     // Wallet storage type for agents wallets
     #[serde(rename = "type")]
     pub xtype: Option<String>,
+    // Optional to override default library path. Default value is determined based on value of
+    // xtype and OS
+    pub plugin_library_path: Option<String>,
+    // Optional to override default storage initialization function. Default value is  determined
+    // based on value of xtype and OS
+    pub plugin_init_function: Option<String>,
     // Wallet storage config for agents wallets
     pub config: Option<Value>,
     // Wallet storage credentials for agents wallets
     pub credentials: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IndyRuntimeConfig {
+    // size of thread pool for the most expensive crypto operations
+    pub crypto_thread_pool_size: usize
 }

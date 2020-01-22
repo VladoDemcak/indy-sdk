@@ -16,7 +16,7 @@ use crate::domain::ledger::constants::{GET_VALIDATOR_INFO, POOL_RESTART, ROLE_RE
 use crate::domain::ledger::cred_def::{CredDefOperation, GetCredDefOperation, GetCredDefReplyResult};
 use crate::domain::ledger::ddo::GetDdoOperation;
 use crate::domain::ledger::node::{NodeOperation, NodeOperationData};
-use crate::domain::ledger::nym::{NymOperation, GetNymOperation};
+use crate::domain::ledger::nym::{GetNymOperation, GetNymReplyResult, GetNymResultDataV0, NymData, NymOperation};
 use crate::domain::ledger::pool::{PoolConfigOperation, PoolRestartOperation, PoolUpgradeOperation, Schedule};
 use crate::domain::ledger::request::{TxnAuthrAgrmtAcceptanceData, Request};
 use crate::domain::ledger::response::{Message, Reply, ReplyType};
@@ -27,12 +27,18 @@ use crate::domain::ledger::txn::{GetTxnOperation, LedgerType};
 use crate::domain::ledger::validator_info::GetValidatorInfoOperation;
 use crate::domain::ledger::auth_rule::*;
 use crate::domain::ledger::author_agreement::*;
-use crate::errors::prelude::*;
-use crate::utils::crypto::hash::hash as openssl_hash;
+use indy_api_types::errors::prelude::*;
+use indy_utils::crypto::hash::hash as openssl_hash;
 
 pub mod merkletree;
 
 macro_rules! build_result {
+        ($operation:ident, $submitter_did:expr) => ({
+            let operation = $operation::new();
+
+            Request::build_request($submitter_did, operation)
+                .map_err(|err| IndyError::from_msg(IndyErrorKind::InvalidState, err))
+        });
         ($operation:ident, $submitter_did:expr, $($params:tt)*) => ({
             let operation = $operation::new($($params)*);
 
@@ -82,6 +88,39 @@ impl LedgerService {
     }
 
     #[logfn(Info)]
+    pub fn parse_get_nym_response(&self, get_nym_response: &str) -> IndyResult<String> {
+        let reply: Reply<GetNymReplyResult> = LedgerService::parse_response(get_nym_response)?;
+
+        let nym_data = match reply.result() {
+            GetNymReplyResult::GetNymReplyResultV0(res) => {
+                let data: GetNymResultDataV0 = res.data
+                    .ok_or(IndyError::from_msg(IndyErrorKind::LedgerItemNotFound, format!("Nym not found")))
+                    .and_then(|data| serde_json::from_str(&data)
+                        .map_err(|err| IndyError::from_msg(IndyErrorKind::InvalidState, format!("Cannot parse GET_NYM response: {}", err)))
+                    )?;
+
+                NymData {
+                    did: data.dest,
+                    verkey: data.verkey,
+                    role: data.role,
+                }
+            }
+            GetNymReplyResult::GetNymReplyResultV1(res) => {
+                NymData {
+                    did: res.txn.data.did,
+                    verkey: res.txn.data.verkey,
+                    role: res.txn.data.role
+                }
+            }
+        };
+
+        let res = serde_json::to_string(&nym_data)
+            .map_err(|err| IndyError::from_msg(IndyErrorKind::InvalidState, format!("Cannot serialize NYM data: {}", err)))?;
+
+        Ok(res)
+    }
+
+    #[logfn(Info)]
     pub fn build_get_ddo_request(&self, identifier: Option<&DidValue>, dest: &DidValue) -> IndyResult<String> {
         build_result!(GetDdoOperation, identifier, dest.to_short())
     }
@@ -103,7 +142,7 @@ impl LedgerService {
 
     #[logfn(Info)]
     pub fn build_schema_request(&self, identifier: &DidValue, schema: SchemaV1) -> IndyResult<String> {
-        let schema_data = SchemaOperationData::new(schema.name, schema.version, schema.attr_names);
+        let schema_data = SchemaOperationData::new(schema.name, schema.version, schema.attr_names.into());
         build_result!(SchemaOperation, Some(identifier), schema_data)
     }
 
@@ -227,14 +266,14 @@ impl LedgerService {
                 id: SchemaId::new(&DidValue::new(&res.dest.0, method_name), &res.data.name, &res.data.version),
                 name: res.data.name,
                 version: res.data.version,
-                attr_names: res.data.attr_names,
+                attr_names: res.data.attr_names.into(),
                 seq_no: Some(res.seq_no),
             },
             GetSchemaReplyResult::GetSchemaReplyResultV1(res) => {
                 SchemaV1 {
                     name: res.txn.data.schema_name,
                     version: res.txn.data.schema_version,
-                    attr_names: res.txn.data.value.attr_names,
+                    attr_names: res.txn.data.value.attr_names.into(),
                     id: match method_name {
                         Some(method) => res.txn.data.id.qualify(method),
                         None => res.txn.data.id
@@ -388,8 +427,13 @@ impl LedgerService {
     }
 
     #[logfn(Info)]
-    pub fn build_txn_author_agreement_request(&self, identifier: &DidValue, text: &str, version: &str) -> IndyResult<String> {
-        build_result!(TxnAuthorAgreementOperation, Some(identifier), text.to_string(), version.to_string())
+    pub fn build_txn_author_agreement_request(&self, identifier: &DidValue, text: Option<&str>, version: &str, ratification_ts: Option<u64>, retirement_ts: Option<u64>) -> IndyResult<String> {
+        build_result!(TxnAuthorAgreementOperation, Some(identifier), text.map(str::to_string), version.to_string(), ratification_ts, retirement_ts)
+    }
+
+    #[logfn(Info)]
+    pub fn build_disable_all_txn_author_agreements_request(&self, identifier: &DidValue) -> IndyResult<String> {
+        build_result!(DisableAllTxnAuthorAgreementsOperation, Some(identifier))
     }
 
     #[logfn(Info)]
@@ -662,7 +706,7 @@ mod tests {
         let ledger_service = LedgerService::new();
 
         let mut attr_names: AttributeNames = AttributeNames::new();
-        attr_names.insert("male".to_string());
+        attr_names.0.insert("male".to_string());
 
         let data = SchemaV1 {
             id: SchemaId::new(&identifier(), "name", "1.0"),
@@ -1048,7 +1092,22 @@ mod tests {
                 "version": VERSION
             });
 
-            let request = ledger_service.build_txn_author_agreement_request(&identifier(), TEXT, VERSION).unwrap();
+            let request = ledger_service.build_txn_author_agreement_request(&identifier(), Some(TEXT), VERSION, None, None).unwrap();
+            check_request(&request, expected_result);
+        }
+
+        #[test]
+        fn build_txn_author_agreement_request_works_for_retired_wo_text() {
+            let ledger_service = LedgerService::new();
+
+            let expected_result = json!({
+                "type": TXN_AUTHR_AGRMT,
+                "version": VERSION,
+                "ratification_ts": 12345,
+                "retirement_ts": 54321,
+            });
+
+            let request = ledger_service.build_txn_author_agreement_request(&identifier(), None, VERSION, Some(12345), Some(54321)).unwrap();
             check_request(&request, expected_result);
         }
 
@@ -1094,7 +1153,7 @@ mod tests {
 
         fn _aml() -> AcceptanceMechanisms {
             let mut aml: AcceptanceMechanisms = AcceptanceMechanisms::new();
-            aml.insert(LABEL.to_string(), json!({"text": "This is description for acceptance mechanism"}));
+            aml.0.insert(LABEL.to_string(), json!({"text": "This is description for acceptance mechanism"}));
             aml
         }
 

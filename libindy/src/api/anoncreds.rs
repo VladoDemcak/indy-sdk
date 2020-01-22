@@ -1,5 +1,5 @@
-use crate::api::{ErrorCode, IndyHandle, CommandHandle, WalletHandle, SearchHandle};
-use crate::errors::prelude::*;
+use indy_api_types::{ErrorCode, IndyHandle, CommandHandle, WalletHandle, SearchHandle};
+use indy_api_types::errors::prelude::*;
 use crate::commands::{Command, CommandExecutor};
 use crate::commands::anoncreds::AnoncredsCommand;
 use crate::commands::anoncreds::issuer::IssuerCommand;
@@ -19,12 +19,12 @@ use crate::domain::anoncreds::proof_request::{ProofRequest, ProofRequestExtraQue
 use crate::domain::anoncreds::requested_credential::RequestedCredentials;
 use crate::domain::anoncreds::revocation_registry::RevocationRegistries;
 use crate::domain::anoncreds::revocation_state::{RevocationState, RevocationStates};
-use crate::utils::ctypes;
+use indy_utils::ctypes;
 
 use libc::c_char;
 use std::ptr;
 
-use crate::utils::validation::Validatable;
+use crate::indy_api_types::validation::Validatable;
 
 /*
 These functions wrap the Ursa algorithm as documented in this paper:
@@ -555,6 +555,7 @@ pub extern fn indy_issuer_create_credential_offer(command_handle: CommandHandle,
 ///      "attr1" : {"raw": "value1", "encoded": "value1_as_int" },
 ///      "attr2" : {"raw": "value1", "encoded": "value1_as_int" }
 ///     }
+///   If you want to use empty value for some credential field, you should set "raw" to "" and "encoded" should not be empty
 /// rev_reg_id: id of revocation registry stored in the wallet
 /// blob_storage_reader_handle: configuration of blob storage reader handle that will allow to read revocation tails (returned by `indy_open_blob_storage_reader`)
 /// cb: Callback that takes command result as parameter.
@@ -1502,7 +1503,7 @@ pub  extern fn indy_prover_close_credentials_search(command_handle: CommandHandl
 ///     {
 ///         "name": string,
 ///         "version": string,
-///         "nonce": string, - a big number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
+///         "nonce": string, - a decimal number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
 ///         "requested_attributes": { // set of requested attributes
 ///              "<attr_referent>": <attr_info>, // see below
 ///              ...,
@@ -1525,7 +1526,10 @@ pub  extern fn indy_prover_close_credentials_search(command_handle: CommandHandl
 /// attr_referent: Proof-request local identifier of requested attribute
 /// attr_info: Describes requested attribute
 ///     {
-///         "name": string, // attribute name, (case insensitive and ignore spaces)
+///         "name": Optional<string>, // attribute name, (case insensitive and ignore spaces)
+///         "names": Optional<[string, string]>, // attribute names, (case insensitive and ignore spaces)
+///                                              // NOTE: should either be "name" or "names", not both and not none of them.
+///                                              // Use "names" to specify several attributes that have to match a single credential.
 ///         "restrictions": Optional<filter_json>, // see below
 ///         "non_revoked": Optional<<non_revoc_interval>>, // see below,
 ///                        // If specified prover must proof non-revocation
@@ -1628,7 +1632,7 @@ pub extern fn indy_prover_get_credentials_for_proof_req(command_handle: CommandH
 ///     {
 ///         "name": string,
 ///         "version": string,
-///         "nonce": string, - a big number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
+///         "nonce": string, - a decimal number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
 ///         "requested_attributes": { // set of requested attributes
 ///              "<attr_referent>": <attr_info>, // see below
 ///              ...,
@@ -1650,7 +1654,10 @@ pub extern fn indy_prover_get_credentials_for_proof_req(command_handle: CommandH
 /// where
 /// attr_info: Describes requested attribute
 ///     {
-///         "name": string, // attribute name, (case insensitive and ignore spaces)
+///         "name": Optional<string>, // attribute name, (case insensitive and ignore spaces)
+///         "names": Optional<[string, string]>, // attribute names, (case insensitive and ignore spaces)
+///                                              // NOTE: should either be "name" or "names", not both and not none of them.
+///                                              // Use "names" to specify several attributes that have to match a single credential.
 ///         "restrictions": Optional<wql query>, // see below
 ///         "non_revoked": Optional<<non_revoc_interval>>, // see below,
 ///                        // If specified prover must proof non-revocation
@@ -1857,7 +1864,7 @@ pub  extern fn indy_prover_close_credentials_search_for_proof_req(command_handle
 ///     {
 ///         "name": string,
 ///         "version": string,
-///         "nonce": string, - a big number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
+///         "nonce": string, - a decimal number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
 ///         "requested_attributes": { // set of requested attributes
 ///              "<attr_referent>": <attr_info>, // see below
 ///              ...,
@@ -1903,24 +1910,28 @@ pub  extern fn indy_prover_close_credentials_search_for_proof_req(command_handle
 ///     }
 /// rev_states_json: all revocation states participating in the proof request
 ///     {
-///         "rev_reg_def1_id": {
+///         "rev_reg_def1_id or credential_1_id": {
 ///             "timestamp1": <rev_state1>,
 ///             "timestamp2": <rev_state2>,
 ///         },
-///         "rev_reg_def2_id": {
+///         "rev_reg_def2_id or credential_1_id"": {
 ///             "timestamp3": <rev_state3>
 ///         },
-///         "rev_reg_def3_id": {
+///         "rev_reg_def3_id or credential_1_id"": {
 ///             "timestamp4": <rev_state4>
 ///         },
 ///     }
+/// Note: use credential_id instead rev_reg_id in case proving several credentials from the same revocation registry.
 /// cb: Callback that takes command result as parameter.
 ///
 /// where
 /// attr_referent: Proof-request local identifier of requested attribute
 /// attr_info: Describes requested attribute
 ///     {
-///         "name": string, // attribute name, (case insensitive and ignore spaces)
+///         "name": Optional<string>, // attribute name, (case insensitive and ignore spaces)
+///         "names": Optional<[string, string]>, // attribute names, (case insensitive and ignore spaces)
+///                                              // NOTE: should either be "name" or "names", not both and not none of them.
+///                                              // Use "names" to specify several attributes that have to match a single credential.
 ///         "restrictions": Optional<wql query>, // see below
 ///         "non_revoked": Optional<<non_revoc_interval>>, // see below,
 ///                        // If specified prover must proof non-revocation
@@ -1965,6 +1976,17 @@ pub  extern fn indy_prover_close_credentials_search_for_proof_req(command_handle
 ///             "revealed_attrs": {
 ///                 "requested_attr1_id": {sub_proof_index: number, raw: string, encoded: string},
 ///                 "requested_attr4_id": {sub_proof_index: number: string, encoded: string},
+///             },
+///             "revealed_attr_groups": {
+///                 "requested_attr5_id": {
+///                     "sub_proof_index": number,
+///                     "values": {
+///                         "attribute_name": {
+///                             "raw": string,
+///                             "encoded": string
+///                         }
+///                     },
+///                 }
 ///             },
 ///             "unrevealed_attrs": {
 ///                 "requested_attr3_id": {sub_proof_index: number}
@@ -2048,7 +2070,7 @@ pub extern fn indy_prover_create_proof(command_handle: CommandHandle,
 ///     {
 ///         "name": string,
 ///         "version": string,
-///         "nonce": string, - a big number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
+///         "nonce": string, - a decimal number represented as a string (use `indy_generate_nonce` function to generate 80-bit number)
 ///         "requested_attributes": { // set of requested attributes
 ///              "<attr_referent>": <attr_info>, // see below
 ///              ...,
@@ -2071,6 +2093,17 @@ pub extern fn indy_prover_create_proof(command_handle: CommandHandle,
 ///             "revealed_attrs": {
 ///                 "requested_attr1_id": {sub_proof_index: number, raw: string, encoded: string}, // NOTE: check that `encoded` value match to `raw` value on application level
 ///                 "requested_attr4_id": {sub_proof_index: number: string, encoded: string}, // NOTE: check that `encoded` value match to `raw` value on application level
+///             },
+///             "revealed_attr_groups": {
+///                 "requested_attr5_id": {
+///                     "sub_proof_index": number,
+///                     "values": {
+///                         "attribute_name": {
+///                             "raw": string,
+///                             "encoded": string
+///                         }
+///                     }, // NOTE: check that `encoded` value match to `raw` value on application level
+///                 }
 ///             },
 ///             "unrevealed_attrs": {
 ///                 "requested_attr3_id": {sub_proof_index: number}
@@ -2124,7 +2157,10 @@ pub extern fn indy_prover_create_proof(command_handle: CommandHandle,
 /// attr_referent: Proof-request local identifier of requested attribute
 /// attr_info: Describes requested attribute
 ///     {
-///         "name": string, // attribute name, (case insensitive and ignore spaces)
+///         "name": Optional<string>, // attribute name, (case insensitive and ignore spaces)
+///         "names": Optional<[string, string]>, // attribute names, (case insensitive and ignore spaces)
+///                                              // NOTE: should either be "name" or "names", not both and not none of them.
+///                                              // Use "names" to specify several attributes that have to match a single credential.
 ///         "restrictions": Optional<wql query>, // see below
 ///         "non_revoked": Optional<<non_revoc_interval>>, // see below,
 ///                        // If specified prover must proof non-revocation
